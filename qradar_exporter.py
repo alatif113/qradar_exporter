@@ -142,6 +142,9 @@ def func(start_time: datetime, end_time: datetime, job_number: int, devicetype_i
 
             if status == "COMPLETED":
                 logger.info(f"Job {job_number}: Search completed with {record_count} events and {size} bytes")
+                if record_count == "0":
+                    return
+                
                 events = get_search_results(search_id)
 
                 if not events:
@@ -198,7 +201,7 @@ def load_ranges_from_csv(csv_path: str):
 
                 ranges.append((devicetype_id, name, start, end, interval))
             except (ValueError, KeyError) as e:
-                logger.error(f"Skipping invalid row in CSV: {row} — Reason: {e}")
+                error_logger.error(f"Skipping invalid row in CSV: {row} — Reason: {e}")
     return ranges
 
 # === Entry Point ===
