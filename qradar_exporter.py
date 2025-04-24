@@ -172,15 +172,13 @@ def func(start_time: datetime, end_time: datetime, job_number: int, devicetype_i
         logger.exception(f"Job {job_number}: Error during execution — Reason: {e}")
 
 # === Worker Thread Loop ===
-def worker(generators: List[TimeIntervalGenerator]):
+def worker(generator: TimeIntervalGenerator):
     while True:
-        for generator in generators:
-            interval = generator.next_interval()
-            if interval:
-                func(*interval)
-                break
+        interval = generator.next_interval()
+        if interval:
+            func(*interval)
         else:
-            return  # No more intervals in any generator
+            break
 
 # === CSV Reader ===
 def load_ranges_from_csv(csv_path: str):
@@ -207,16 +205,17 @@ def load_ranges_from_csv(csv_path: str):
 # === Entry Point ===
 def run_workers_from_csv(csv_file_path: str, worker_count: int):
     ranges = load_ranges_from_csv(csv_file_path)
-    generators = [TimeIntervalGenerator(devicetype_id, name, start, end, interval) for devicetype_id, name, start, end, interval in ranges]
 
     threads = []
-    for i in range(worker_count):
-        t = threading.Thread(target=worker, args=(generators,), name=f"Worker-{i+1}")
-        t.start()
-        threads.append(t)
+    for devicetype_id, name, start, end, interval in ranges:
+        generator = TimeIntervalGenerator(devicetype_id, name, start, end, interval)
+        for i in range(worker_count)
+            t = threading.Thread(target=worker, args=(generator,), name=f"Worker-{name}-{i+1}")
+            t.start()
+            threads.append(t)
 
-    for t in threads:
-        t.join()
+        for t in threads:
+            t.join()
 
 # === Main ===
 if __name__ == "__main__":
