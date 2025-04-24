@@ -25,16 +25,17 @@ HEADERS = {
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "log")
 os.makedirs(LOG_DIR, exist_ok=True)
 
+# === Setup exports directory ===
+EXPORTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "exports")
+os.makedirs(EXPORTS_DIR, exist_ok=True)
+
 # === Shared Error Logger ===
-error_logger = logging.getLogger("errors")
-error_logger.setLevel(logging.ERROR)
 error_handler = RotatingFileHandler(os.path.join(LOG_DIR, "errors.log"), maxBytes=5 * 1024 * 1024, backupCount=10)
+error_handler.setLevel(logging.ERROR)
 error_handler.setFormatter(logging.Formatter(
     '%(asctime)s [%(threadName)s] %(name)s %(levelname)s: %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 ))
-error_logger.addHandler(error_handler)
-error_logger.propagate = False
 
 # === Dynamic Loggers by Range Name ===
 loggers: Dict[str, logging.Logger] = {}
@@ -42,9 +43,9 @@ loggers: Dict[str, logging.Logger] = {}
 def get_range_logger(devicetype_name: str) -> logging.Logger:
     if devicetype_name not in loggers:
         logger = logging.getLogger(devicetype_name)
-        logger.setLevel(logging.INFO)
 
-        file_handler = RotatingFileHandler(os.path.join(LOG_DIR, f"{devicetype_name}.log"), maxBytes=5 * 1024 * 1024, backupCount=10)        
+        file_handler = RotatingFileHandler(os.path.join(LOG_DIR, f"{devicetype_name}.log"), maxBytes=5 * 1024 * 1024, backupCount=10)  
+        file_handler.setLevel(logging.INFO)      
         file_handler.setFormatter(logging.Formatter(
             '%(asctime)s [%(threadName)s] %(levelname)s: %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
@@ -52,6 +53,7 @@ def get_range_logger(devicetype_name: str) -> logging.Logger:
 
         logger.addHandler(file_handler)
         logger.addHandler(error_handler)  # Shared error log
+        logger.setLevel(logging.INFO)
         logger.propagate = False
         loggers[devicetype_name] = logger
 
@@ -144,7 +146,8 @@ def func(start_time: datetime, end_time: datetime, job_number: int, devicetype_i
                     return
 
                 filename = f"{devicetype_name}_{search_id}.log".replace(":", "-")
-                with open(filename, "w") as f:
+                filepath = os.path.join(EXPORTS_DIR, filename)
+                with open(filepath, "w") as f:
                     for event in events:
                         f.write(event["payload"] + "\n")
                 logger.info(f"Job {job_number}: Results written to {filename}")
