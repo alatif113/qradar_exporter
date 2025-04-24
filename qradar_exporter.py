@@ -111,6 +111,7 @@ def submit_search(devicetype_id, start_time, stop_time):
     response.raise_for_status()
     return response.json().get("search_id")
 
+# === Get Search Status ===
 def get_search_status(search_id):
     url = BASE_URL + STATUS_ENDPOINT.format(search_id=search_id)
 
@@ -119,6 +120,7 @@ def get_search_status(search_id):
     res_json = response.json()
     return res_json.get("status"), res_json.get("progress"), res_json.get("record_count"), res_json.get("data_total_size"), res_json.get("query_string")
 
+# === Get Search Results ===
 def get_search_results(search_id):
     url = BASE_URL + RESULTS_ENDPOINT.format(search_id=search_id)
 
