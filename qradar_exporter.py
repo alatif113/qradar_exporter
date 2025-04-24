@@ -129,7 +129,7 @@ def get_search_results(search_id):
     return response.json().get("events")
 
 # === Worker Function ===
-def func(start_time: datetime, end_time: datetime, job_number: int, devicetype_id: str, devicetype_name: str, total_jobs: int):
+def get_events(start_time: datetime, end_time: datetime, job_number: int, devicetype_id: str, devicetype_name: str, total_jobs: int):
     logger = get_range_logger(devicetype_name)
     logger.info(f"Starting job {job_number} of {total_jobs} for '{devicetype_name}' on interval {start_time} to {end_time}")
 
@@ -156,7 +156,7 @@ def func(start_time: datetime, end_time: datetime, job_number: int, devicetype_i
                     logger.error(f"Job {job_number}: No events returned")
                     return
 
-                filename = f"{devicetype_name}_{search_id}.log".replace(":", "-")
+                filename = f"{devicetype_name}_{start_time.strftime("%Y-%m-%d-%H-%M")}_{end_time.strftime("%Y-%m-%d-%H-%M")}.log"
                 filepath = os.path.join(EXPORTS_DIR, filename)
                 with open(filepath, "w") as f:
                     for event in events:
@@ -181,7 +181,7 @@ def worker(generator: TimeIntervalGenerator):
     while True:
         interval = generator.next_interval()
         if interval:
-            func(*interval)
+            get_events(*interval)
         else:
             break
 
