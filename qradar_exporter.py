@@ -9,8 +9,12 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Tuple, Dict
 
 # === Constants ===
-ENDPOINT1 = "https://api.example.com/submit"
-ENDPOINT2 = "https://api.example.com/status"
+SEC_TOKEN = ""
+BASE_URL = "https://siem.mgroupnet.com"
+SEARCH_ENDPOINT = "/api/ariel/searches"
+STATUS_ENDPOINT = "/api/ariel/searches/{search_id}/"
+RESULTS_ENDPOINT = "/api/ariel/searches/{search_id}/results"
+QUERY = "SELECT UTF8(payload) as payload from events where devicetype = {devicetype_id} START '{start_time}' STOP '{stop_time}'"
 
 # === Setup log directory ===
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "log")
@@ -81,16 +85,51 @@ class TimeIntervalGenerator:
             self.current = end
             job_number = self.progress_tracker.next_job_number()
             return (start, end, job_number, self.devicetype_id, self.devicetype_name, self.total_jobs)
+        
+# === Submit Search ===
+def submit_search(devicetype_id, start_time, stop_time):
+    url = BASE_URL + SEARCH_ENDPOINT
+    query = QUERY.format(devicetype_id=devicetype_id, start_time=start_time, stop_time=stop_time)
+    params = {"query_expression": query}
+    headers = {
+        'SEC': SEC_TOKEN,
+        'Content-Type': 'application/json',
+        'accept': 'application/json'
+    }
+    response = requests.post(url, headers=headers, params=params)
+    response.raise_for_status()
+    return response.json().get("search_id")
+
+def get_search_status(search_id):
+    url = BASE_URL + STATUS_ENDPOINT.format(search_id=search_id)
+    headers = {
+        'SEC': SEC_TOKEN,
+        'Content-Type': 'application/json',
+        'accept': 'application/json'
+    }
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    res_json = response.json()
+    return res_json.get("status"), res_json.get("progress"), res_json.get("record_count"), res_json.get("data_total_size")
+
+def get_search_results(search_id):
+    url = BASE_URL + RESULTS_ENDPOINT.format(search_id=search_id)
+    headers = {
+        'SEC': SEC_TOKEN,
+        'Content-Type': 'application/json',
+        'accept': 'application/json'
+    }
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    return response.json().get("events")
 
 # === Worker Function ===
-def func(start: datetime, end: datetime, job_number: int, devicetype_id: str, devicetype_name: str, total_jobs: int):
+def func(start_time: datetime, end_time: datetime, job_number: int, devicetype_id: str, devicetype_name: str, total_jobs: int):
     logger = get_range_logger(devicetype_name)
     logger.info(f"Starting job {job_number} of {total_jobs} for '{devicetype_name}' on interval {start} to {end}")
 
     try:
-        response = requests.post(ENDPOINT1, json={"startTime": start.isoformat(), "endTime": end.isoformat(), "rangeId": devicetype_id})
-        response.raise_for_status()
-        job_id = response.json().get("id")
+        search_id = submit_search(devicetype_id, start_time, end)
 
         if not job_id:
             logger.error(f"Job {job_number} [{start} - {end}]: No job ID returned")
