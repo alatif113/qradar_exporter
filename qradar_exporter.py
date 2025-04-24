@@ -15,6 +15,11 @@ SEARCH_ENDPOINT = "/api/ariel/searches"
 STATUS_ENDPOINT = "/api/ariel/searches/{search_id}/"
 RESULTS_ENDPOINT = "/api/ariel/searches/{search_id}/results"
 QUERY = "SELECT UTF8(payload) as payload from events where devicetype = {devicetype_id} START '{start_time}' STOP '{stop_time}'"
+HEADERS = {
+        'SEC': SEC_TOKEN,
+        'Content-Type': 'application/json',
+        'accept': 'application/json'
+    }
 
 # === Setup log directory ===
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "log")
@@ -88,77 +93,74 @@ class TimeIntervalGenerator:
         
 # === Submit Search ===
 def submit_search(devicetype_id, start_time, stop_time):
+    start_time_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
+    stop_time_str = stop_time.strftime("%Y-%m-%d %H:%M:%S")
     url = BASE_URL + SEARCH_ENDPOINT
-    query = QUERY.format(devicetype_id=devicetype_id, start_time=start_time, stop_time=stop_time)
+    query = QUERY.format(devicetype_id=devicetype_id, start_time=start_time_str, stop_time=stop_time_str)
     params = {"query_expression": query}
-    headers = {
-        'SEC': SEC_TOKEN,
-        'Content-Type': 'application/json',
-        'accept': 'application/json'
-    }
-    response = requests.post(url, headers=headers, params=params)
+
+    response = requests.post(url, headers=HEADERS, params=params)
     response.raise_for_status()
     return response.json().get("search_id")
 
 def get_search_status(search_id):
     url = BASE_URL + STATUS_ENDPOINT.format(search_id=search_id)
-    headers = {
-        'SEC': SEC_TOKEN,
-        'Content-Type': 'application/json',
-        'accept': 'application/json'
-    }
-    response = requests.get(url, headers=headers)
+
+    response = requests.get(url, headers=HEADERS)
     response.raise_for_status()
     res_json = response.json()
-    return res_json.get("status"), res_json.get("progress"), res_json.get("record_count"), res_json.get("data_total_size")
+    return res_json.get("status"), res_json.get("progress"), res_json.get("record_count"), res_json.get("data_total_size"), res_json.get("query_string")
 
 def get_search_results(search_id):
     url = BASE_URL + RESULTS_ENDPOINT.format(search_id=search_id)
-    headers = {
-        'SEC': SEC_TOKEN,
-        'Content-Type': 'application/json',
-        'accept': 'application/json'
-    }
-    response = requests.get(url, headers=headers)
+
+    response = requests.get(url, headers=HEADERS)
     response.raise_for_status()
     return response.json().get("events")
 
 # === Worker Function ===
 def func(start_time: datetime, end_time: datetime, job_number: int, devicetype_id: str, devicetype_name: str, total_jobs: int):
     logger = get_range_logger(devicetype_name)
-    logger.info(f"Starting job {job_number} of {total_jobs} for '{devicetype_name}' on interval {start} to {end}")
+    logger.info(f"Starting job {job_number} of {total_jobs} for '{devicetype_name}' on interval {start_time} to {end_time}")
 
     try:
-        search_id = submit_search(devicetype_id, start_time, end)
+        search_id = submit_search(devicetype_id, start_time, end_time)
 
-        if not job_id:
-            logger.error(f"Job {job_number} [{start} - {end}]: No job ID returned")
+        if not search_id:
+            logger.error(f"Job {job_number}: No search ID returned")
             return
 
-        logger.info(f"Job {job_number} [{start} - {end}]: Submitted with ID {job_id}")
+        logger.info(f"Job {job_number}: Search submitted with ID {search_id}")
 
         while True:
-            poll_response = requests.get(ENDPOINT2, params={"id": job_id})
-            poll_response.raise_for_status()
-            status_json = poll_response.json()
-            status = status_json.get("status")
+            status, progress, record_count, size, query = get_search_status(search_id)
 
-            if status == "Complete":
-                logger.info(f"Job {job_number} [{start} - {end}]: Job {job_id} complete")
-                filename = f"{devicetype_name}_job{job_id}_{start.isoformat()}_{end.isoformat()}.json".replace(":", "-")
+            if status == "COMPLETED":
+                logger.info(f"Job {job_number}: Search completed with {record_count} events and {size} bytes")
+                events = get_search_results(search_id)
+
+                if not events:
+                    logger.error(f"Job {job_number}: No events returned")
+                    return
+
+                filename = f"{devicetype_name}_{search_id}.log".replace(":", "-")
                 with open(filename, "w") as f:
-                    f.write(poll_response.text)
-                logger.info(f"Job {job_number} [{start} - {end}]: Results written to {filename}")
+                    for event in events:
+                        f.write(event["payload"] + "\n")
+                logger.info(f"Job {job_number}: Results written to {filename}")
                 break
-            elif status == "Failed":
-                logger.warning(f"Job {job_number} [{start} - {end}]: Job {job_id} failed")
+            elif status == "ERROR":
+                logger.error(f"Job {job_number}: Search failed with query {query}")
+                break
+            elif status == "CANCELED":
+                logger.error(f"Job {job_number}: Search canceled with query {query}")
                 break
             else:
-                logger.info(f"Job {job_number} [{start} - {end}]: Status = {status}, retrying in 5s")
-                time.sleep(5)
+                logger.info(f"Job {job_number}: Search in status {status} with progress {progress}, retrying in 10s")
+                time.sleep(10)
 
-    except requests.RequestException:
-        logger.exception(f"Job {job_number} [{start} - {end}]: Error during execution")
+    except requests.RequestException as e:
+        logger.exception(f"Job {job_number}: Error during execution — Reason: {e}")
 
 # === Worker Thread Loop ===
 def worker(generators: List[TimeIntervalGenerator]):
