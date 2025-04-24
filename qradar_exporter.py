@@ -54,7 +54,7 @@ def get_range_logger(devicetype_name: str) -> logging.Logger:
 
         file_handler = RotatingFileHandler(os.path.join(LOG_DIR, f"{devicetype_name}.log"), maxBytes=5 * 1024 * 1024, backupCount=10)  
         file_handler.setLevel(logging.INFO)      
-        file_handler.setFormatter(logging.Formatterlogging.Formatter(LOG_FORMAT))
+        file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
 
         logger.addHandler(file_handler)
         logger.addHandler(error_handler)    # Shared error log
@@ -156,7 +156,7 @@ def get_events(start_time: datetime, end_time: datetime, job_number: int, device
                     logger.error(f"Job {job_number}: No events returned")
                     return
 
-                filename = f"{devicetype_name}_{start_time.strftime("%Y-%m-%d-%H-%M")}_{end_time.strftime("%Y-%m-%d-%H-%M")}.log"
+                filename = f"{devicetype_name}_{start_time.strftime('%Y-%m-%d-%H-%M')}_{end_time.strftime('%Y-%m-%d-%H-%M')}.log"
                 filepath = os.path.join(EXPORTS_DIR, filename)
                 with open(filepath, "w") as f:
                     for event in events:
