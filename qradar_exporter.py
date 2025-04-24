@@ -5,10 +5,12 @@ import requests
 import logging
 import os
 from logging.handlers import RotatingFileHandler
+from logging import StreamHandler
 from datetime import datetime, timedelta
-from typing import Optional, List, Tuple, Dict
+from typing import Optional, Tuple, Dict
 
 # === Constants ===
+WORKER_COUNT = 4
 SEC_TOKEN = ""
 BASE_URL = "https://siem.mgroupnet.com"
 SEARCH_ENDPOINT = "/api/ariel/searches"
@@ -20,6 +22,7 @@ HEADERS = {
         'Content-Type': 'application/json',
         'accept': 'application/json'
     }
+LOG_FORMAT = "%(asctime)s [%(threadName)s] %(name)s %(levelname)s: %(message)s"
 
 # === Setup log directory ===
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "log")
@@ -32,13 +35,15 @@ os.makedirs(EXPORTS_DIR, exist_ok=True)
 # === Shared Error Logger ===
 error_handler = RotatingFileHandler(os.path.join(LOG_DIR, "errors.log"), maxBytes=5 * 1024 * 1024, backupCount=10)
 error_handler.setLevel(logging.ERROR)
-error_handler.setFormatter(logging.Formatter(
-    '%(asctime)s [%(threadName)s] %(name)s %(levelname)s: %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-))
+error_handler.setFormatter(logging.Formatter(LOG_FORMAT))
 error_logger = logging.getLogger("error")
 error_logger.addHandler(error_handler)
 error_logger.setLevel(logging.ERROR)
+
+# === Shared Stream Logger ===
+stream_handler = StreamHandler()
+stream_handler.setLevel(logging.INFO)
+stream_handler.setFormatter(logging.Formatter(LOG_FORMAT))
 
 # === Dynamic Loggers by Range Name ===
 loggers: Dict[str, logging.Logger] = {}
@@ -49,13 +54,11 @@ def get_range_logger(devicetype_name: str) -> logging.Logger:
 
         file_handler = RotatingFileHandler(os.path.join(LOG_DIR, f"{devicetype_name}.log"), maxBytes=5 * 1024 * 1024, backupCount=10)  
         file_handler.setLevel(logging.INFO)      
-        file_handler.setFormatter(logging.Formatter(
-            '%(asctime)s [%(threadName)s] %(levelname)s: %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        ))
+        file_handler.setFormatter(logging.Formatterlogging.Formatter(LOG_FORMAT))
 
         logger.addHandler(file_handler)
-        logger.addHandler(error_handler)  # Shared error log
+        logger.addHandler(error_handler)    # Shared error log
+        logger.addHandler(stream_handler)   # Shared stream log
         logger.setLevel(logging.INFO)
         logger.propagate = False
         loggers[devicetype_name] = logger
@@ -181,14 +184,14 @@ def worker(generator: TimeIntervalGenerator):
             break
 
 # === CSV Reader ===
-def load_ranges_from_csv(csv_path: str):
+def load_data_from_csv(csv_path: str):
     expected_format = "%Y-%m-%d %H:%M:%S"
-    ranges = []
+    input = []
     with open(csv_path, newline='') as csvfile:
         reader = csv.DictReader(csvfile)
         for row in reader:
             try:
-                devicetype_id = row['id']
+                id = row['id']
                 name = row['name']
                 start = datetime.strptime(row['startTime'], expected_format)
                 end = datetime.strptime(row['endTime'], expected_format)
@@ -197,14 +200,14 @@ def load_ranges_from_csv(csv_path: str):
                 if end <= start:
                     raise ValueError(f"End time must be after start time in range: {name}")
 
-                ranges.append((devicetype_id, name, start, end, interval))
+                input.append((id, name, start, end, interval))
             except (ValueError, KeyError) as e:
                 error_logger.error(f"Skipping invalid row in CSV: {row} — Reason: {e}")
-    return ranges
+    return input
 
 # === Entry Point ===
 def run_workers_from_csv(csv_file_path: str, worker_count: int):
-    ranges = load_ranges_from_csv(csv_file_path)
+    ranges = load_data_from_csv(csv_file_path)
 
     threads = []
     for devicetype_id, name, start, end, interval in ranges:
@@ -219,4 +222,4 @@ def run_workers_from_csv(csv_file_path: str, worker_count: int):
 
 # === Main ===
 if __name__ == "__main__":
-    run_workers_from_csv("input.csv", worker_count=4)
+    run_workers_from_csv("input.csv", worker_count=WORKER_COUNT)
