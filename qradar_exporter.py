@@ -44,7 +44,7 @@ def get_range_logger(devicetype_name: str) -> logging.Logger:
         logger = logging.getLogger(devicetype_name)
         logger.setLevel(logging.INFO)
 
-        file_handler = RotatingFileHandler(os.path.join(LOG_DIR, f"{range_name}.log"), maxBytes=5 * 1024 * 1024, backupCount=10)        
+        file_handler = RotatingFileHandler(os.path.join(LOG_DIR, f"{devicetype_name}.log"), maxBytes=5 * 1024 * 1024, backupCount=10)        
         file_handler.setFormatter(logging.Formatter(
             '%(asctime)s [%(threadName)s] %(levelname)s: %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
