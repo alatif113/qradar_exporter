@@ -36,6 +36,9 @@ error_handler.setFormatter(logging.Formatter(
     '%(asctime)s [%(threadName)s] %(name)s %(levelname)s: %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 ))
+error_logger = logging.getLogger("error")
+error_logger.addHandler(error_handler)
+error_logger.setLevel(logging.ERROR)
 
 # === Dynamic Loggers by Range Name ===
 loggers: Dict[str, logging.Logger] = {}
@@ -195,7 +198,7 @@ def load_ranges_from_csv(csv_path: str):
 
                 ranges.append((devicetype_id, name, start, end, interval))
             except (ValueError, KeyError) as e:
-                error_logger.error(f"Skipping invalid row in CSV: {row} — Reason: {e}")
+                logger.error(f"Skipping invalid row in CSV: {row} — Reason: {e}")
     return ranges
 
 # === Entry Point ===
