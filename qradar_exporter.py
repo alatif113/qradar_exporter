@@ -212,7 +212,7 @@ def run_workers_from_csv(csv_file_path: str, worker_count: int):
     threads = []
     for devicetype_id, name, start, end, interval in ranges:
         generator = TimeIntervalGenerator(devicetype_id, name, start, end, interval)
-        for i in range(worker_count)
+        for i in range(worker_count):
             t = threading.Thread(target=worker, args=(generator,), name=f"Worker-{name}-{i+1}")
             t.start()
             threads.append(t)
