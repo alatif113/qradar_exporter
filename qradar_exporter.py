@@ -118,7 +118,7 @@ def get_search_status(search_id):
     response = requests.get(url, headers=HEADERS)
     response.raise_for_status()
     res_json = response.json()
-    return res_json.get("status"), res_json.get("progress"), res_json.get("record_count"), res_json.get("data_total_size"), res_json.get("query_string")
+    return res_json.get("status"), res_json.get("progress"), res_json.get("record_count"), res_json.get("query_string")
 
 # === Get Search Results ===
 def get_search_results(search_id):
@@ -143,10 +143,10 @@ def get_events(start_time: datetime, end_time: datetime, job_number: int, device
         logger.info(f"Job {job_number}: Search submitted with ID {search_id}")
 
         while True:
-            status, progress, record_count, size, query = get_search_status(search_id)
+            status, progress, record_count, query = get_search_status(search_id)
 
             if status == "COMPLETED":
-                logger.info(f"Job {job_number}: Search completed with {record_count} events and {size} bytes")
+                logger.info(f"Job {job_number}: Search completed with {record_count} events")
                 if record_count == "0":
                     return
                 
