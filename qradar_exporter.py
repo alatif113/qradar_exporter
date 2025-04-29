@@ -16,7 +16,8 @@ BASE_URL = "https://siem.mgroupnet.com"
 SEARCH_ENDPOINT = "/api/ariel/searches"
 STATUS_ENDPOINT = "/api/ariel/searches/{search_id}"
 RESULTS_ENDPOINT = "/api/ariel/searches/{search_id}/results"
-QUERY = "SELECT UTF8(payload) as payload from events where devicetype = {devicetype_id} START '{start_time}' STOP '{stop_time}'"
+QUERY = "SELECT UTF8(payload) as payload from events where devicetype = {id} START '{start_time}' STOP '{stop_time}'"
+#QUERY = "SELECT UTF8(payload) as payload from events WHERE logsourceid = {id} START '{start_time}' STOP '{stop_time}'"
 HEADERS = {
         'SEC': SEC_TOKEN,
         'Content-Type': 'application/json',
@@ -48,11 +49,11 @@ stream_handler.setFormatter(logging.Formatter(LOG_FORMAT))
 # === Dynamic Loggers by Range Name ===
 loggers: Dict[str, logging.Logger] = {}
 
-def get_range_logger(devicetype_name: str) -> logging.Logger:
-    if devicetype_name not in loggers:
-        logger = logging.getLogger(devicetype_name)
+def get_range_logger(name: str) -> logging.Logger:
+    if name not in loggers:
+        logger = logging.getLogger(name)
 
-        file_handler = RotatingFileHandler(os.path.join(LOG_DIR, f"{devicetype_name}.log"), maxBytes=5 * 1024 * 1024, backupCount=10)  
+        file_handler = RotatingFileHandler(os.path.join(LOG_DIR, f"{name}.log"), maxBytes=5 * 1024 * 1024, backupCount=10)  
         file_handler.setLevel(logging.INFO)      
         file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
 
@@ -61,9 +62,9 @@ def get_range_logger(devicetype_name: str) -> logging.Logger:
         logger.addHandler(stream_handler)   # Shared stream log
         logger.setLevel(logging.INFO)
         logger.propagate = False
-        loggers[devicetype_name] = logger
+        loggers[name] = logger
 
-    return loggers[devicetype_name]
+    return loggers[name]
 
 # === Job Progress Tracker ===
 class JobProgressTracker:
@@ -79,9 +80,9 @@ class JobProgressTracker:
 
 # === Time Interval Generator ===
 class TimeIntervalGenerator:
-    def __init__(self, devicetype_id, devicetype_name, start_time, end_time, interval_minutes):
-        self.devicetype_id = devicetype_id
-        self.devicetype_name = devicetype_name
+    def __init__(self, id, name, start_time, end_time, interval_minutes):
+        self.id = id
+        self.name = name
         self.current = start_time
         self.end = end_time
         self.interval = timedelta(minutes=interval_minutes)
@@ -97,14 +98,14 @@ class TimeIntervalGenerator:
             end = min(start + self.interval, self.end)
             self.current = end
             job_number = self.progress_tracker.next_job_number()
-            return (start, end, job_number, self.devicetype_id, self.devicetype_name, self.total_jobs)
+            return (start, end, job_number, self.id, self.name, self.total_jobs)
         
 # === Submit Search ===
-def submit_search(devicetype_id, start_time, stop_time):
+def submit_search(id, start_time, stop_time):
     start_time_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
     stop_time_str = stop_time.strftime("%Y-%m-%d %H:%M:%S")
     url = BASE_URL + SEARCH_ENDPOINT
-    query = QUERY.format(devicetype_id=devicetype_id, start_time=start_time_str, stop_time=stop_time_str)
+    query = QUERY.format(id=id, start_time=start_time_str, stop_time=stop_time_str)
     params = {"query_expression": query}
 
     response = requests.post(url, headers=HEADERS, params=params)
@@ -129,12 +130,12 @@ def get_search_results(search_id):
     return response.json().get("events")
 
 # === Worker Function ===
-def get_events(start_time: datetime, end_time: datetime, job_number: int, devicetype_id: str, devicetype_name: str, total_jobs: int):
-    logger = get_range_logger(devicetype_name)
-    logger.info(f"Starting job {job_number} of {total_jobs} for '{devicetype_name}' on interval {start_time} to {end_time}")
+def get_events(start_time: datetime, end_time: datetime, job_number: int, id: str, name: str, total_jobs: int):
+    logger = get_range_logger(name)
+    logger.info(f"Starting job {job_number} of {total_jobs} for '{name}' on interval {start_time} to {end_time}")
 
     try:
-        search_id = submit_search(devicetype_id, start_time, end_time)
+        search_id = submit_search(id, start_time, end_time)
 
         if not search_id:
             logger.error(f"Job {job_number}: No search ID returned")
@@ -156,7 +157,7 @@ def get_events(start_time: datetime, end_time: datetime, job_number: int, device
                     logger.error(f"Job {job_number}: No events returned")
                     return
 
-                filename = f"{devicetype_name}_{start_time.strftime('%Y-%m-%d-%H-%M')}_{end_time.strftime('%Y-%m-%d-%H-%M')}.log"
+                filename = f"{name}_{start_time.strftime('%Y-%m-%d-%H-%M')}_{end_time.strftime('%Y-%m-%d-%H-%M')}.log"
                 filepath = os.path.join(EXPORTS_DIR, filename)
                 with open(filepath, "w") as f:
                     for event in events:
@@ -195,9 +196,9 @@ def load_data_from_csv(csv_path: str):
             try:
                 id = row['id']
                 name = row['name']
-                start = datetime.strptime(row['startTime'], expected_format)
-                end = datetime.strptime(row['endTime'], expected_format)
-                interval = int(row['timeInterval'])
+                start = datetime.strptime(row['start_time'], expected_format)
+                end = datetime.strptime(row['end_time'], expected_format)
+                interval = int(row['interval_minutes'])
 
                 if end <= start:
                     raise ValueError(f"End time must be after start time in range: {name}")
@@ -212,8 +213,8 @@ def run_workers_from_csv(csv_file_path: str, worker_count: int):
     ranges = load_data_from_csv(csv_file_path)
 
     threads = []
-    for devicetype_id, name, start, end, interval in ranges:
-        generator = TimeIntervalGenerator(devicetype_id, name, start, end, interval)
+    for id, name, start, end, interval in ranges:
+        generator = TimeIntervalGenerator(id, name, start, end, interval)
         for i in range(worker_count):
             t = threading.Thread(target=worker, args=(generator,), name=f"Worker-{name}-{i+1}")
             t.start()
