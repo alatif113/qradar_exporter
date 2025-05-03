@@ -132,7 +132,7 @@ def get_search_results(search_id):
 # === Worker Function ===
 def get_events(start_time: datetime, end_time: datetime, job_number: int, id: str, name: str, total_jobs: int):
     logger = get_range_logger(name)
-    logger.info(f"Starting job {job_number} of {total_jobs} for '{name}' on interval {start_time} to {end_time}")
+    logger.info(f"Starting job {job_number} of {total_jobs} ({int(job_number/total_jobs * 100)}%) for '{name}' on interval {start_time} to {end_time}")
 
     try:
         search_id = submit_search(id, start_time, end_time)
@@ -148,7 +148,7 @@ def get_events(start_time: datetime, end_time: datetime, job_number: int, id: st
 
             if status == "COMPLETED":
                 logger.info(f"Job {job_number}: Search completed with {record_count} events")
-                if record_count == "0":
+                if record_count == 0:
                     return
                 
                 events = get_search_results(search_id)
