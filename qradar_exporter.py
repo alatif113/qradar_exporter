@@ -171,8 +171,8 @@ def get_events(start_time: datetime, end_time: datetime, job_number: int, id: st
                 logger.error(f"Job {job_number}: Search canceled with query {query}")
                 break
             else:
-                logger.info(f"Job {job_number}: Search in status {status} with progress {progress}, retrying in 10s")
-                time.sleep(10)
+                logger.info(f"Job {job_number}: Search in status {status} with progress {progress}, retrying in 5s")
+                time.sleep(5)
 
     except requests.RequestException as e:
         logger.exception(f"Job {job_number}: Error during execution — Reason: {e}")
