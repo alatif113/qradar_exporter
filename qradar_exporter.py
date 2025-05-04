@@ -4,6 +4,7 @@ import time
 import requests
 import logging
 import os
+import socket
 from logging.handlers import RotatingFileHandler
 from logging import StreamHandler
 from datetime import datetime, timedelta
@@ -17,6 +18,7 @@ SEARCH_ENDPOINT = "/api/ariel/searches"
 STATUS_ENDPOINT = "/api/ariel/searches/{search_id}"
 RESULTS_ENDPOINT = "/api/ariel/searches/{search_id}/results"
 QUERY = "SELECT UTF8(payload) as payload from events where devicetype = {id} START '{start_time}' STOP '{stop_time}'"
+BINDPLANE_PORT = 1514
 #QUERY = "SELECT UTF8(payload) as payload from events WHERE logsourceid = {id} START '{start_time}' STOP '{stop_time}'"
 HEADERS = {
         'SEC': SEC_TOKEN,
@@ -78,6 +80,24 @@ class JobProgressTracker:
             self.current_job += 1
             return self.current_job
 
+class TCPClient:
+    def __init__(self, host, port):
+        self.host = host
+        self.port = port
+        self.sock = None
+        self.running = True
+
+    def connect(self):
+        while self.running:
+            try:
+                self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                self.sock.connect((self.host, self.port))
+                return
+            except Exception as e:
+                print(f"[!] Connection failed: {e}. Retrying in {RECONNECT_DELAY}s...")
+                time.sleep(RECONNECT_DELAY)
+
 # === Time Interval Generator ===
 class TimeIntervalGenerator:
     def __init__(self, id, name, start_time, end_time, interval_minutes):
@@ -130,7 +150,7 @@ def get_search_results(search_id):
     return response.json().get("events")
 
 # === Worker Function ===
-def get_events(start_time: datetime, end_time: datetime, job_number: int, id: str, name: str, total_jobs: int):
+def get_events(start_time: datetime, end_time: datetime, job_number: int, id: str, name: str, total_jobs: int, sock: socket.socket):
     logger = get_range_logger(name)
     logger.info(f"Starting job {job_number} of {total_jobs} ({int(job_number/total_jobs * 100)}%) for '{name}' on interval {start_time} to {end_time}")
 
@@ -157,12 +177,19 @@ def get_events(start_time: datetime, end_time: datetime, job_number: int, id: st
                     logger.error(f"Job {job_number}: No events returned")
                     return
 
-                filename = f"{name}_{start_time.strftime('%Y-%m-%d-%H-%M')}_{end_time.strftime('%Y-%m-%d-%H-%M')}.log"
-                filepath = os.path.join(EXPORTS_DIR, filename)
-                with open(filepath, "w") as f:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                    sock.connect(('127.0.0.1', BINDPLANE_PORT))
                     for event in events:
-                        f.write(event["payload"] + "\n")
-                logger.info(f"Job {job_number}: Results written to {filename}")
+                        sock.sendall(event.encode('utf-8'))
+
+                    logger.info(f"Job {job_number}: Events from {start_time.strftime('%Y-%m-%d-%H-%M')} to {end_time.strftime('%Y-%m-%d-%H-%M')} sent to 127.0.0.1:{BINDPLANE_PORT}")
+
+                #filename = f"{name}_{start_time.strftime('%Y-%m-%d-%H-%M')}_{end_time.strftime('%Y-%m-%d-%H-%M')}.log"
+                #filepath = os.path.join(EXPORTS_DIR, filename)
+                #with open(filepath, "w") as f:
+                #    for event in events:
+                #        f.write(event["payload"] + "\n")
+                #logger.info(f"Job {job_number}: Results written to {filename}")
                 break
             elif status == "ERROR":
                 logger.error(f"Job {job_number}: Search failed with query {query}")
@@ -178,11 +205,11 @@ def get_events(start_time: datetime, end_time: datetime, job_number: int, id: st
         logger.exception(f"Job {job_number}: Error during execution — Reason: {e}")
 
 # === Worker Thread Loop ===
-def worker(generator: TimeIntervalGenerator):
+def worker(generator: TimeIntervalGenerator, sock: socket.socket):
     while True:
         interval = generator.next_interval()
         if interval:
-            get_events(*interval)
+            get_events(*interval, sock)
         else:
             break
 
@@ -211,12 +238,12 @@ def load_data_from_csv(csv_path: str):
 # === Entry Point ===
 def run_workers_from_csv(csv_file_path: str, worker_count: int):
     ranges = load_data_from_csv(csv_file_path)
-
     threads = []
+              
     for id, name, start, end, interval in ranges:
         generator = TimeIntervalGenerator(id, name, start, end, interval)
         for i in range(worker_count):
-            t = threading.Thread(target=worker, args=(generator,), name=f"Worker-{name}-{i+1}")
+            t = threading.Thread(target=worker, args=(generator,sock,), name=f"Worker-{name}-{i+1}")
             t.start()
             threads.append(t)
 
