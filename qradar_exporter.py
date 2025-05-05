@@ -161,8 +161,7 @@ def get_events(start_time: datetime, end_time: datetime, job_number: int, id: st
 
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                     sock.connect(('127.0.0.1', port))
-                    for event in events:
-                        sock.sendall(event.encode('utf-8'))
+                    sock.sendall("".join([event["payload"] for event in events]).encode('utf-8'))
 
                     logger.info(f"Job {job_number}: Events from {start_time.strftime('%Y-%m-%d-%H-%M')} to {end_time.strftime('%Y-%m-%d-%H-%M')} sent to 127.0.0.1:{BINDPLANE_PORT}")
 
