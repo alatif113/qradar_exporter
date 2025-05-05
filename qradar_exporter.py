@@ -10,15 +10,17 @@ from logging import StreamHandler
 from datetime import datetime, timedelta
 from typing import Optional, Tuple, Dict
 
+requests.packages.urllib3.disable_warnings()
+
 # === Constants ===
-WORKER_COUNT = 4
+WORKER_COUNT = 16
 SEC_TOKEN = ""
 BASE_URL = "https://siem.mgroupnet.com"
 SEARCH_ENDPOINT = "/api/ariel/searches"
 STATUS_ENDPOINT = "/api/ariel/searches/{search_id}"
 RESULTS_ENDPOINT = "/api/ariel/searches/{search_id}/results"
-QUERY = "SELECT UTF8(payload) as payload from events where devicetype = {id} START '{start_time}' STOP '{stop_time}'"
-#QUERY = "SELECT UTF8(payload) as payload from events WHERE logsourceid = {id} START '{start_time}' STOP '{stop_time}'"
+#QUERY = "SELECT UTF8(payload) as payload from events where devicetype = {id} START '{start_time}' STOP '{stop_time}'"
+QUERY = "SELECT UTF8(payload) as payload from events WHERE logsourceid = {id} START '{start_time}' STOP '{stop_time}'"
 HEADERS = {
         'SEC': SEC_TOKEN,
         'Content-Type': 'application/json',
@@ -122,7 +124,7 @@ def submit_search(id, start_time, stop_time):
     query = QUERY.format(id=id, start_time=start_time_str, stop_time=stop_time_str)
     params = {"query_expression": query}
 
-    response = requests.post(url, headers=HEADERS, params=params)
+    response = requests.post(url, headers=HEADERS, params=params, verify=False)
     response.raise_for_status()
     return response.json().get("search_id")
 
@@ -130,7 +132,7 @@ def submit_search(id, start_time, stop_time):
 def get_search_status(search_id):
     url = BASE_URL + STATUS_ENDPOINT.format(search_id=search_id)
 
-    response = requests.get(url, headers=HEADERS)
+    response = requests.get(url, headers=HEADERS, verify=False)
     response.raise_for_status()
     res_json = response.json()
     return res_json.get("status"), res_json.get("progress"), res_json.get("record_count"), res_json.get("query_string")
@@ -139,7 +141,7 @@ def get_search_status(search_id):
 def get_search_results(search_id):
     url = BASE_URL + RESULTS_ENDPOINT.format(search_id=search_id)
 
-    response = requests.get(url, headers=HEADERS)
+    response = requests.get(url, headers=HEADERS, verify=False)
     response.raise_for_status()
     return response.json().get("events")
 
@@ -174,22 +176,17 @@ def get_events(start_time: datetime, end_time: datetime, job_number: int, id: st
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                     sock.connect(('127.0.0.1', port))
                     sock.sendall("".join([event["payload"] for event in events]).encode('utf-8'))
-
                     logger.info(f"Job {job_number}: Events from {start_time.strftime('%Y-%m-%d-%H-%M')} to {end_time.strftime('%Y-%m-%d-%H-%M')} sent to 127.0.0.1:{port}")
-
-                #filename = f"{name}_{start_time.strftime('%Y-%m-%d-%H-%M')}_{end_time.strftime('%Y-%m-%d-%H-%M')}.log"
-                #filepath = os.path.join(EXPORTS_DIR, filename)
-                #with open(filepath, "w") as f:
-                #    for event in events:
-                #        f.write(event["payload"] + "\n")
-                #logger.info(f"Job {job_number}: Results written to {filename}")
                 break
+            
             elif status == "ERROR":
                 logger.error(f"Job {job_number}: Search failed with query {query}")
                 break
+            
             elif status == "CANCELED":
                 logger.error(f"Job {job_number}: Search canceled with query {query}")
                 break
+            
             else:
                 logger.info(f"Job {job_number}: Search in status {status} with progress {progress}, retrying in 5s")
                 time.sleep(5)
@@ -224,7 +221,7 @@ def load_data_from_csv(csv_path: str):
                 if end <= start:
                     raise ValueError(f"End time must be after start time in range: {name}")
 
-                input.append((id, name, start, end, interval))
+                input.append((id, name, start, end, interval, port))
             except (ValueError, KeyError) as e:
                 error_logger.error(f"Skipping invalid row in CSV: {row} — Reason: {e}")
     return input
