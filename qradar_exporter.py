@@ -72,6 +72,7 @@ class JobProgressTracker:
     def __init__(self, total_jobs):
         self.total_jobs = total_jobs
         self.current_job = 0
+        self.start_time = time.time()
         self.lock = threading.Lock()
 
     def next_job_number(self):
@@ -79,9 +80,16 @@ class JobProgressTracker:
             self.current_job += 1
             return self.current_job
 
+    def estimate_remaining(self):
+        duration = time.time() - self.start_time
+        avg_duration = duration / self.current_job
+        remaining_jobs = self.total_jobs - self.current_job
+        return timedelta(seconds=remaining_jobs * avg_duration)
+
 # === Time Interval Generator ===
 class TimeIntervalGenerator:
     def __init__(self, id, name, start, end, interval, port):
+        self.logger = logging.getLogger(name)
         self.id = id
         self.name = name
         self.current = start
@@ -100,6 +108,10 @@ class TimeIntervalGenerator:
             end = min(start + self.interval, self.end)
             self.current = end
             job_number = self.progress_tracker.next_job_number()
+            
+            if job_number % 10 == 0:
+                self.logger.info(f"Estimated time remaining: {self.progress_tracker.estimate_remaining()}")
+
             return (start, end, job_number, self.id, self.name, self.total_jobs, self.port)
         
 # === Submit Search ===
@@ -135,7 +147,7 @@ def get_search_results(search_id):
 def get_events(start_time: datetime, end_time: datetime, job_number: int, id: str, name: str, total_jobs: int, port: int):
     logger = get_range_logger(name)
     logger.info(f"Starting job {job_number} of {total_jobs} ({int(job_number/total_jobs * 100)}%) for '{name}' on interval {start_time} to {end_time}")
-
+    
     try:
         search_id = submit_search(id, start_time, end_time)
 
@@ -163,7 +175,7 @@ def get_events(start_time: datetime, end_time: datetime, job_number: int, id: st
                     sock.connect(('127.0.0.1', port))
                     sock.sendall("".join([event["payload"] for event in events]).encode('utf-8'))
 
-                    logger.info(f"Job {job_number}: Events from {start_time.strftime('%Y-%m-%d-%H-%M')} to {end_time.strftime('%Y-%m-%d-%H-%M')} sent to 127.0.0.1:{BINDPLANE_PORT}")
+                    logger.info(f"Job {job_number}: Events from {start_time.strftime('%Y-%m-%d-%H-%M')} to {end_time.strftime('%Y-%m-%d-%H-%M')} sent to 127.0.0.1:{port}")
 
                 #filename = f"{name}_{start_time.strftime('%Y-%m-%d-%H-%M')}_{end_time.strftime('%Y-%m-%d-%H-%M')}.log"
                 #filepath = os.path.join(EXPORTS_DIR, filename)
