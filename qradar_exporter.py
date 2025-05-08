@@ -144,10 +144,6 @@ def get_search_results(search_id):
     response.raise_for_status()
     return response.json().get("events")
 
-def chunk_list(data, chunk_size=CHUNK_SIZE):
-    for i in range(0, len(data), chunk_size):
-        yield data[i:i + chunk_size]
-
 # === Worker Function ===
 def get_events(start_time: datetime, end_time: datetime, id: str, name: str, port: int, prepend_name: bool, global_tracker: JobProgressTracker):
     logger = get_range_logger(name)
@@ -184,13 +180,12 @@ def get_events(start_time: datetime, end_time: datetime, id: str, name: str, por
 
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                     sock.connect(('127.0.0.1', port))
-                    for chunk in chunk_list(events):
-                        if prepend_name:
-                            payload = [f"{name} {event['payload']}" for event in chunk]
-                        else:
-                            payload = [event['payload'] for event in chunk]
+                    if prepend_name:
+                        payload = [f"{name} {event['payload']}" for event in events]
+                    else:
+                        payload = [event['payload'] for event in events]
 
-                        sock.sendall("".join(payload).encode('utf-8'))
+                    sock.sendall("".join(payload).encode('utf-8'))
 
                 logger.info(f"{log_prefix}: Exported {record_count} events")
                 break
