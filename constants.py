@@ -16,7 +16,6 @@ INPUT_CSV = args.input_csv
 
 # === Logging Constants ===
 LOG_FORMAT = "%(asctime)s [%(threadName)s] %(name)s %(levelname)s: %(message)s"
-LOG_FILE_PATH = LOG_DIR / "logfile.log"
 ERROR_LOG_FILE_PATH = LOG_DIR / "errors.log"
 
 # === Log Rotation Settings ===

@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Tuple, Dict
 from concurrent.futures import ThreadPoolExecutor
 from constants import (
-    CHUNK_SIZE, INPUT_CSV, LOG_FORMAT, LOG_FILE_PATH, ERROR_LOG_FILE_PATH,MAX_LOG_FILE_SIZE, BACKUP_COUNT, WORKER_COUNT, LOG_LEVEL, HEADERS, BASE_URL, SEARCH_ENDPOINT, STATUS_ENDPOINT, RESULTS_ENDPOINT, QUERY
+    CHUNK_SIZE, INPUT_CSV, LOG_FORMAT, LOG_DIR, ERROR_LOG_FILE_PATH,MAX_LOG_FILE_SIZE, BACKUP_COUNT, WORKER_COUNT, LOG_LEVEL, HEADERS, BASE_URL, SEARCH_ENDPOINT, STATUS_ENDPOINT, RESULTS_ENDPOINT, QUERY
 )
 
 requests.packages.urllib3.disable_warnings()
@@ -42,7 +42,7 @@ def get_range_logger(name: str) -> logging.Logger:
     if name not in loggers:
         logger = logging.getLogger(name)
 
-        file_handler = RotatingFileHandler(LOG_FILE_PATH, maxBytes=MAX_LOG_FILE_SIZE, backupCount=BACKUP_COUNT)  
+        file_handler = RotatingFileHandler(LOG_DIR / f"{name}.log", maxBytes=MAX_LOG_FILE_SIZE, backupCount=BACKUP_COUNT)  
         file_handler.setLevel(logging.INFO)      
         file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
 
