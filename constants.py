@@ -36,6 +36,7 @@ HEADERS = {
     'Content-Type': 'application/json',
     'Accept': 'application/json'
 }
+CHUNK_SIZE = 50000
 
 # === Worker Constants ===
 WORKER_COUNT = args.worker_count
