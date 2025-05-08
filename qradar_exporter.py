@@ -11,32 +11,14 @@ from logging import StreamHandler
 from datetime import datetime, timedelta
 from typing import Optional, Tuple, Dict
 from concurrent.futures import ThreadPoolExecutor
+from constants import (
+    LOG_FORMAT, LOG_FILE_PATH, ERROR_LOG_FILE_PATH,MAX_LOG_FILE_SIZE, BACKUP_COUNT, WORKER_COUNT, LOG_LEVEL, HEADERS, BASE_URL, SEARCH_ENDPOINT, STATUS_ENDPOINT, RESULTS_ENDPOINT, QUERY
+)
 
 requests.packages.urllib3.disable_warnings()
 
-# === Constants ===
-WORKER_COUNT = 16
-SEC_TOKEN = ""
-BASE_URL = "https://siem.mgroupnet.com"
-SEARCH_ENDPOINT = "/api/ariel/searches"
-STATUS_ENDPOINT = "/api/ariel/searches/{search_id}"
-RESULTS_ENDPOINT = "/api/ariel/searches/{search_id}/results"
-#QUERY = "SELECT UTF8(payload) as payload from events where devicetype = {id} START '{start_time}' STOP '{stop_time}'"
-QUERY = "SELECT UTF8(payload) as payload from events WHERE logsourceid = {id} START '{start_time}' STOP '{stop_time}'"
-HEADERS = {
-        'SEC': SEC_TOKEN,
-        'Content-Type': 'application/json',
-        'accept': 'application/json'
-    }
-LOG_FORMAT = "%(asctime)s [%(threadName)s] %(name)s %(levelname)s: %(message)s"
-
-# === Setup log directory ===
-BASE_DIR = Path(__file__).resolve().parent
-LOG_DIR = BASE_DIR / "log"
-LOG_DIR.mkdir(parents=True, exist_ok=True)
-
 # === Shared Error Logger ===
-error_handler = RotatingFileHandler(LOG_DIR / "errors.log"), maxBytes=5 * 1024 * 1024, backupCount=10)
+error_handler = RotatingFileHandler(ERROR_LOG_FILE_PATH, maxBytes=MAX_LOG_FILE_SIZE, backupCount=BACKUP_COUNT)
 error_handler.setLevel(logging.ERROR)
 error_handler.setFormatter(logging.Formatter(LOG_FORMAT))
 error_logger = logging.getLogger("error")
@@ -66,14 +48,14 @@ def get_range_logger(name: str) -> logging.Logger:
     if name not in loggers:
         logger = logging.getLogger(name)
 
-        file_handler = RotatingFileHandler(LOG_DIR / f"{name}.log"), maxBytes=5 * 1024 * 1024, backupCount=10)  
+        file_handler = RotatingFileHandler(LOG_FILE_PATH, maxBytes=MAX_LOG_FILE_SIZE, backupCount=BACKUP_COUNT)  
         file_handler.setLevel(logging.INFO)      
         file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
         listener.addHandler(file_handler)
 
         logger.addHandler(queue_handler)
         logger.addHandler(stream_handler)   # Shared stream log
-        logger.setLevel(logging.INFO)
+        logger.setLevel(LOG_LEVEL)
         logger.propagate = False
         loggers[name] = logger
 
@@ -126,7 +108,7 @@ class TimeIntervalGenerator:
             job_number = self.progress_tracker.next_job_number()
 
             if job_number % 5 == 0:
-                self.logger.info(f"Estimated time remaining: {self.progress_tracker.estimate_remaining()}")
+                self.logger.info(f"!!! Estimated time remaining: {self.progress_tracker.estimate_remaining()} !!!")
 
             return (
                 interval_start,
@@ -154,7 +136,6 @@ def submit_search(id, start_time, stop_time):
 # === Get Search Status ===
 def get_search_status(search_id):
     url = BASE_URL + STATUS_ENDPOINT.format(search_id=search_id)
-
     response = session.get(url)
     response.raise_for_status()
     res_json = response.json()
@@ -163,7 +144,6 @@ def get_search_status(search_id):
 # === Get Search Results ===
 def get_search_results(search_id):
     url = BASE_URL + RESULTS_ENDPOINT.format(search_id=search_id)
-
     response = session.get(url)
     response.raise_for_status()
     return response.json().get("events")
@@ -171,20 +151,22 @@ def get_search_results(search_id):
 # === Worker Function ===
 def get_events(start_time: datetime, end_time: datetime, job_number: int, id: str, name: str, total_jobs: int, port: int, prepend_name: bool):
     logger = get_range_logger(name)
-    logger.info(f"Starting job {job_number} of {total_jobs} ({int(job_number/total_jobs * 100)}%) for '{name}' on interval {start_time} to {end_time}")
+    log_prefix = f"Job {job_number} of {total_jobs} ({int(job_number/total_jobs * 100)}%)"
+    logger.info(f"{log_prefix}: Searching '{name}' on interval {start_time} to {end_time}")
     
     try:
         search_id = submit_search(id, start_time, end_time)
 
         if not search_id:
-            logger.error(f"Job {job_number}: No search ID returned")
+            logger.error(f"{log_prefix}: No search ID returned")
             return
 
         while True:
             status, progress, record_count, query = get_search_status(search_id)
 
             if status == "COMPLETED":
-                logger.info(f"Job {job_number}: Search completed with {record_count} events")
+                logger.info(f"{log_prefix}: Search completed with {record_count} events")
+                
                 if record_count == 0:
                     return
                 
@@ -205,19 +187,19 @@ def get_events(start_time: datetime, end_time: datetime, job_number: int, id: st
                 break
             
             elif status == "ERROR":
-                logger.error(f"Job {job_number}: Search failed with query {query}")
+                logger.error(f"{log_prefix}: Search failed with query {query}")
                 break
             
             elif status == "CANCELED":
-                logger.error(f"Job {job_number}: Search canceled with query {query}")
+                logger.error(f"{log_prefix}: Search canceled with query {query}")
                 break
             
             else:
-                logger.info(f"Job {job_number}: Search in status {status} with progress {progress}, retrying in 5s")
+                logger.info(f"{log_prefix}: Search in status {status} with progress {progress}, retrying in 5s")
                 time.sleep(5)
 
     except requests.RequestException as e:
-        logger.exception(f"Job {job_number}: Error during execution — Reason: {e}")
+        logger.exception(f"{log_prefix}: Error during execution — Reason: {e}")
 
 # === Worker Thread Loop ===
 def worker(generator: TimeIntervalGenerator):
