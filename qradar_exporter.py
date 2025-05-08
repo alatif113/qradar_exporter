@@ -175,7 +175,7 @@ def get_events(start_time: datetime, end_time: datetime, id: str, name: str, por
                 events = get_search_results(search_id)
 
                 if not events:
-                    logger.error(f"{log_prefix}: No events returned")
+                    logger.error(f"{log_prefix}: {record_count} events could not be returned")
                     return
 
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
