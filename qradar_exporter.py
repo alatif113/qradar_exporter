@@ -181,11 +181,11 @@ def get_events(start_time: datetime, end_time: datetime, id: str, name: str, por
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                     sock.connect(('127.0.0.1', port))
                     if prepend_name:
-                        payload = [f"{name} {event['payload']}" for event in events]
+                        payload = [f"{name} {event['payload'].strip()}" for event in events]
                     else:
-                        payload = [event['payload'] for event in events]
+                        payload = [event['payload'].strip() for event in events]
 
-                    sock.sendall("".join(payload).encode('utf-8'))
+                    sock.sendall("\n".join(payload).encode('utf-8'))
 
                 logger.info(f"{log_prefix}: Exported {record_count} events")
                 break
