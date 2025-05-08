@@ -167,15 +167,16 @@ def get_events(start_time: datetime, end_time: datetime, id: str, name: str, por
             status, progress, record_count, query = get_search_status(search_id)
 
             if status == "COMPLETED":
-                logger.info(f"{log_prefix}: Search completed with {record_count} events")
                 
-                if record_count == 0:
+                
+                if record_count > 0:
+                    logger.info(f"{log_prefix}: No events found in interval")
                     return
                 
                 events = get_search_results(search_id)
 
                 if not events:
-                    logger.error(f"Job {job_number}: No events returned")
+                    logger.error(f"{log_prefix}: No events returned")
                     return
 
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -186,6 +187,8 @@ def get_events(start_time: datetime, end_time: datetime, id: str, name: str, por
                         payload = [event['payload'] for event in events]
 
                     sock.sendall("".join(payload).encode('utf-8'))
+
+                logger.info(f"{log_prefix}: Exported {record_count} events")
                 break
             
             elif status == "ERROR":
