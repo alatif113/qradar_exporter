@@ -168,8 +168,7 @@ def get_events(start_time: datetime, end_time: datetime, id: str, name: str, por
 
             if status == "COMPLETED":
                 
-                
-                if record_count > 0:
+                if record_count == 0:
                     logger.info(f"{log_prefix}: No events found in interval")
                     return
                 
