@@ -67,16 +67,22 @@ class JobProgressTracker:
         self.start_time = time.time()
         self.lock = threading.Lock()
 
-    def next_job_number(self):
+    def get_current_job(self):
         with self.lock:
-            self.current_job += 1
+            self.get_current_job += 1
             return self.current_job
+        
+    def get_total_jobs(self):
+        return self.total_jobs
 
     def estimate_remaining(self):
-        duration = time.time() - self.start_time
-        avg_duration = duration / self.current_job
-        remaining_jobs = self.total_jobs - self.current_job
-        return timedelta(seconds=remaining_jobs * avg_duration)
+        with self.lock:
+            if self.current_job == 0:
+                return None
+            elapsed = time.time() - self.start_time
+            avg_duration = elapsed / self.current_job
+            remaining_jobs = self.total_jobs - self.current_job
+            return timedelta(seconds=remaining_jobs * avg_duration)
 
 # === Time Interval Generator ===
 class TimeIntervalGenerator:
@@ -91,10 +97,9 @@ class TimeIntervalGenerator:
         self.port = port
         self.lock = threading.Lock()
         self.total_jobs = int(((end - start).total_seconds()) // (interval * 60))
-        self.progress_tracker = JobProgressTracker(self.total_jobs)
         self.prepend_name = prepend_name
 
-    def next_interval(self) -> Optional[Tuple[datetime, datetime, int, str, str, int, int, bool]]:
+    def next_interval(self) -> Optional[Tuple[datetime, datetime, int, str, int, bool]]:
         with self.lock:
             if self.current <= self.start:
                 return None  # Reached or passed the lower bound
@@ -103,18 +108,11 @@ class TimeIntervalGenerator:
             interval_start = max(self.start, interval_end - self.interval)
             self.current = interval_start  # Move pointer back for next call
 
-            job_number = self.progress_tracker.next_job_number()
-
-            if job_number % 5 == 0:
-                self.logger.info(f"!!! Estimated time remaining: {self.progress_tracker.estimate_remaining()} !!!")
-
             return (
                 interval_start,
                 interval_end,
-                job_number,
                 self.id,
                 self.name,
-                self.total_jobs,
                 self.port,
                 self.prepend_name,
             )
@@ -147,9 +145,15 @@ def get_search_results(search_id):
     return response.json().get("events")
 
 # === Worker Function ===
-def get_events(start_time: datetime, end_time: datetime, job_number: int, id: str, name: str, total_jobs: int, port: int, prepend_name: bool):
+def get_events(start_time: datetime, end_time: datetime, id: str, name: str, port: int, prepend_name: bool, global_tracker: JobProgressTracker):
     logger = get_range_logger(name)
-    log_prefix = f"Job {job_number} of {total_jobs} ({int(job_number/total_jobs * 100)}%)"
+    job_number = global_tracker.get_current_job()
+    total_jobs = global_tracker.get_total_jobs()
+    log_prefix = f"Job {job_number} of {global_tracker.total_jobs} ({int(job_number/total_jobs * 100)}%)"
+
+    if job_number % 5 == 0:
+        logger.info(f"!!! ESTIMATED TIME REMAINING: {global_tracker.estimate_remaining()}")
+
     logger.info(f"{log_prefix}: Searching '{name}' on interval {start_time} to {end_time}")
     
     try:
@@ -200,7 +204,7 @@ def get_events(start_time: datetime, end_time: datetime, job_number: int, id: st
         logger.exception(f"{log_prefix}: Error during execution — Reason: {e}")
 
 # === Worker Thread Loop ===
-def round_robin_worker(generators, exhausted, exhausted_lock):
+def round_robin_worker(generators, exhausted, exhausted_lock, global_tracker):
     while True:
         all_exhausted = True
 
@@ -211,7 +215,7 @@ def round_robin_worker(generators, exhausted, exhausted_lock):
 
             interval = generator.next_interval()
             if interval:
-                get_events(*interval)
+                get_events(*interval, global_tracker)
                 all_exhausted = False
             else:
                 with exhausted_lock:
@@ -252,18 +256,22 @@ def load_data_from_csv(csv_path: str):
 
 # === Entry Point ===
 def run_workers_from_csv(csv_file_path: str, worker_count: int):
-    generators = [TimeIntervalGenerator(*args) for args in load_data_from_csv(csv_file_path)]
+    input_list = load_data_from_csv(csv_file_path)
+    generators = [TimeIntervalGenerator(*args) for args in input_list]
 
     if not generators:
         error_logger.error("No valid generators found.")
         return
+    
+    total_jobs = sum(int(((end - start).total_seconds()) // (interval * 60)) for (_, _, start, end, interval, _, _) in input_list)
+    global_tracker = JobProgressTracker(total_jobs)
 
     exhausted = set()
     exhausted_lock = threading.Lock()
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         for _ in range(worker_count):
-            executor.submit(round_robin_worker, generators, exhausted, exhausted_lock)
+            executor.submit(round_robin_worker, generators, exhausted, exhausted_lock, global_tracker)
 
 # === Main ===
 if __name__ == "__main__":
