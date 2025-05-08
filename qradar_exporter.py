@@ -90,31 +90,32 @@ class JobProgressTracker:
 
 # === Time Interval Generator ===
 class TimeIntervalGenerator:
-    def __init__(self, id, name, start, end, interval, port):
+    def __init__(self, id, name, start, end, interval, port, prepend_name):
         self.logger = logging.getLogger(name)
         self.id = id
         self.name = name
         self.current = start
-        self.end = end
+        self.start = start
         self.interval = timedelta(minutes=interval)
         self.port = port
         self.lock = threading.Lock()
         self.total_jobs = int(((end - start).total_seconds()) // (interval * 60))
         self.progress_tracker = JobProgressTracker(self.total_jobs)
+        self.prepend_name = prepend_name
 
-    def next_interval(self) -> Optional[Tuple[datetime, datetime, int, str, str, int, int]]:
+    def next_interval(self) -> Optional[Tuple[datetime, datetime, int, str, str, int, int, bool]]:
         with self.lock:
-            if self.current >= self.end:
+            if self.current <= self.start:
                 return None
-            start = self.current
-            end = min(start + self.interval, self.end)
+            end = self.current
+            start = max(end - self.interval, self.start)
             self.current = end
             job_number = self.progress_tracker.next_job_number()
             
             if job_number % 10 == 0:
                 self.logger.info(f"Estimated time remaining: {self.progress_tracker.estimate_remaining()}")
 
-            return (start, end, job_number, self.id, self.name, self.total_jobs, self.port)
+            return (start, end, job_number, self.id, self.name, self.total_jobs, self.port, self.prepend_name)
         
 # === Submit Search ===
 def submit_search(id, start_time, stop_time):
@@ -146,7 +147,7 @@ def get_search_results(search_id):
     return response.json().get("events")
 
 # === Worker Function ===
-def get_events(start_time: datetime, end_time: datetime, job_number: int, id: str, name: str, total_jobs: int, port: int):
+def get_events(start_time: datetime, end_time: datetime, job_number: int, id: str, name: str, total_jobs: int, port: int, prepend_name: bool):
     logger = get_range_logger(name)
     logger.info(f"Starting job {job_number} of {total_jobs} ({int(job_number/total_jobs * 100)}%) for '{name}' on interval {start_time} to {end_time}")
     
@@ -175,7 +176,12 @@ def get_events(start_time: datetime, end_time: datetime, job_number: int, id: st
 
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                     sock.connect(('127.0.0.1', port))
-                    sock.sendall("".join([event["payload"] for event in events]).encode('utf-8'))
+                    if prepend_name:
+                        payload = [f"{name} {event['payload']}" for event in events]
+                    else:
+                        payload = [event['payload'] for event in events]
+
+                    sock.sendall("".join(payload).encode('utf-8'))
                     logger.info(f"Job {job_number}: Events from {start_time.strftime('%Y-%m-%d-%H-%M')} to {end_time.strftime('%Y-%m-%d-%H-%M')} sent to 127.0.0.1:{port}")
                 break
             
@@ -217,11 +223,12 @@ def load_data_from_csv(csv_path: str):
                 end = datetime.strptime(row['end_time'], expected_format)
                 interval = int(row['interval_minutes'])
                 port = int(row['port'])
+                prepend_name = row['prepend_name'].lower() in ['t', 'true', '1', 'y', 'yes']
 
                 if end <= start:
                     raise ValueError(f"End time must be after start time in range: {name}")
 
-                input.append((id, name, start, end, interval, port))
+                input.append((id, name, start, end, interval, port, prepend_name))
             except (ValueError, KeyError) as e:
                 error_logger.error(f"Skipping invalid row in CSV: {row} — Reason: {e}")
     return input
@@ -231,8 +238,8 @@ def run_workers_from_csv(csv_file_path: str, worker_count: int):
     ranges = load_data_from_csv(csv_file_path)
     threads = []
               
-    for id, name, start, end, interval, port in ranges:
-        generator = TimeIntervalGenerator(id, name, start, end, interval, port)
+    for id, name, start, end, interval, port, prepend_name in ranges:
+        generator = TimeIntervalGenerator(id, name, start, end, interval, port, prepend_name)
         for i in range(worker_count):
             t = threading.Thread(target=worker, args=(generator,), name=f"Worker-{name}-{i+1}")
             t.start()
