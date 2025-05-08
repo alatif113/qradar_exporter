@@ -69,7 +69,7 @@ class JobProgressTracker:
 
     def get_current_job(self):
         with self.lock:
-            self.get_current_job += 1
+            self.current_job += 1
             return self.current_job
         
     def get_total_jobs(self):
