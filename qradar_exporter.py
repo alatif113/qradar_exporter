@@ -112,7 +112,7 @@ class TimeIntervalGenerator:
             self.current = end
             job_number = self.progress_tracker.next_job_number()
             
-            if job_number % 10 == 0:
+            if job_number % 5 == 0:
                 self.logger.info(f"Estimated time remaining: {self.progress_tracker.estimate_remaining()}")
 
             return (start, end, job_number, self.id, self.name, self.total_jobs, self.port, self.prepend_name)
