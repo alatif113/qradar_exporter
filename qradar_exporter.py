@@ -202,12 +202,24 @@ def get_events(start_time: datetime, end_time: datetime, job_number: int, id: st
         logger.exception(f"{log_prefix}: Error during execution — Reason: {e}")
 
 # === Worker Thread Loop ===
-def worker(generator: TimeIntervalGenerator):
+def round_robin_worker(generators, exhausted, exhausted_lock):
     while True:
-        interval = generator.next_interval()
-        if interval:
-            get_events(*interval)
-        else:
+        all_exhausted = True
+
+        for i, generator in enumerate(generators):
+            with exhausted_lock:
+                if i in exhausted:
+                    continue
+
+            interval = generator.next_interval()
+            if interval:
+                get_events(*interval)
+                all_exhausted = False
+            else:
+                with exhausted_lock:
+                    exhausted.add(i)
+
+        if all_exhausted:
             break
 
 # === CSV Reader ===
@@ -245,15 +257,15 @@ def run_workers_from_csv(csv_file_path: str, worker_count: int):
     generators = [TimeIntervalGenerator(*args) for args in load_data_from_csv(csv_file_path)]
 
     if not generators:
-        error_logger.error("No valid generators loaded from CSV. Exiting.")
+        error_logger.error("No valid generators found.")
         return
 
-    # Cap the number of threads to the number of generators
-    max_threads = min(worker_count, len(generators))
+    exhausted = set()
+    exhausted_lock = threading.Lock()
 
-    with ThreadPoolExecutor(max_workers=max_threads) as executor:
-        for generator in generators:
-            executor.submit(worker, generator) 
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        for _ in range(worker_count):
+            executor.submit(round_robin_worker, generators, exhausted, exhausted_lock)
 
 # === Main ===
 if __name__ == "__main__":
