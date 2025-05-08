@@ -3,12 +3,14 @@ import threading
 import time
 import requests
 import logging
-import os
 import socket
-from logging.handlers import RotatingFileHandler
+from pathlib import Path
+from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
+from queue import Queue
 from logging import StreamHandler
 from datetime import datetime, timedelta
 from typing import Optional, Tuple, Dict
+from concurrent.futures import ThreadPoolExecutor
 
 requests.packages.urllib3.disable_warnings()
 
@@ -29,15 +31,12 @@ HEADERS = {
 LOG_FORMAT = "%(asctime)s [%(threadName)s] %(name)s %(levelname)s: %(message)s"
 
 # === Setup log directory ===
-LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "log")
-os.makedirs(LOG_DIR, exist_ok=True)
-
-# === Setup exports directory ===
-EXPORTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "exports")
-os.makedirs(EXPORTS_DIR, exist_ok=True)
+BASE_DIR = Path(__file__).resolve().parent
+LOG_DIR = BASE_DIR / "log"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # === Shared Error Logger ===
-error_handler = RotatingFileHandler(os.path.join(LOG_DIR, "errors.log"), maxBytes=5 * 1024 * 1024, backupCount=10)
+error_handler = RotatingFileHandler(LOG_DIR / "errors.log"), maxBytes=5 * 1024 * 1024, backupCount=10)
 error_handler.setLevel(logging.ERROR)
 error_handler.setFormatter(logging.Formatter(LOG_FORMAT))
 error_logger = logging.getLogger("error")
@@ -49,19 +48,30 @@ stream_handler = StreamHandler()
 stream_handler.setLevel(logging.INFO)
 stream_handler.setFormatter(logging.Formatter(LOG_FORMAT))
 
+# === Setup Queue for Asynchronous Logging ===
+log_queue = Queue()
+queue_handler = QueueHandler(log_queue)
+listener = QueueListener(log_queue, error_handler)
+listener.start()
+
 # === Dynamic Loggers by Range Name ===
 loggers: Dict[str, logging.Logger] = {}
+
+# === Shared HTTP Session ===
+session = requests.Session()
+session.headers.update(HEADERS)
+session.verify = False
 
 def get_range_logger(name: str) -> logging.Logger:
     if name not in loggers:
         logger = logging.getLogger(name)
 
-        file_handler = RotatingFileHandler(os.path.join(LOG_DIR, f"{name}.log"), maxBytes=5 * 1024 * 1024, backupCount=10)  
+        file_handler = RotatingFileHandler(LOG_DIR / f"{name}.log"), maxBytes=5 * 1024 * 1024, backupCount=10)  
         file_handler.setLevel(logging.INFO)      
         file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+        listener.addHandler(file_handler)
 
-        logger.addHandler(file_handler)
-        logger.addHandler(error_handler)    # Shared error log
+        logger.addHandler(queue_handler)
         logger.addHandler(stream_handler)   # Shared stream log
         logger.setLevel(logging.INFO)
         logger.propagate = False
@@ -94,8 +104,9 @@ class TimeIntervalGenerator:
         self.logger = logging.getLogger(name)
         self.id = id
         self.name = name
-        self.current = start
         self.start = start
+        self.end = end
+        self.current = end  # Start from the END and move backward
         self.interval = timedelta(minutes=interval)
         self.port = port
         self.lock = threading.Lock()
@@ -106,16 +117,27 @@ class TimeIntervalGenerator:
     def next_interval(self) -> Optional[Tuple[datetime, datetime, int, str, str, int, int, bool]]:
         with self.lock:
             if self.current <= self.start:
-                return None
-            end = self.current
-            start = max(end - self.interval, self.start)
-            self.current = end
-            job_number = self.progress_tracker.next_job_number()
+                return None  # Reached or passed the lower bound
             
+            interval_end = self.current
+            interval_start = max(self.start, interval_end - self.interval)
+            self.current = interval_start  # Move pointer back for next call
+
+            job_number = self.progress_tracker.next_job_number()
+
             if job_number % 5 == 0:
                 self.logger.info(f"Estimated time remaining: {self.progress_tracker.estimate_remaining()}")
 
-            return (start, end, job_number, self.id, self.name, self.total_jobs, self.port, self.prepend_name)
+            return (
+                interval_start,
+                interval_end,
+                job_number,
+                self.id,
+                self.name,
+                self.total_jobs,
+                self.port,
+                self.prepend_name,
+            )
         
 # === Submit Search ===
 def submit_search(id, start_time, stop_time):
@@ -125,7 +147,7 @@ def submit_search(id, start_time, stop_time):
     query = QUERY.format(id=id, start_time=start_time_str, stop_time=stop_time_str)
     params = {"query_expression": query}
 
-    response = requests.post(url, headers=HEADERS, params=params, verify=False)
+    response = session.post(url, params=params)
     response.raise_for_status()
     return response.json().get("search_id")
 
@@ -133,7 +155,7 @@ def submit_search(id, start_time, stop_time):
 def get_search_status(search_id):
     url = BASE_URL + STATUS_ENDPOINT.format(search_id=search_id)
 
-    response = requests.get(url, headers=HEADERS, verify=False)
+    response = session.get(url)
     response.raise_for_status()
     res_json = response.json()
     return res_json.get("status"), res_json.get("progress"), res_json.get("record_count"), res_json.get("query_string")
@@ -142,7 +164,7 @@ def get_search_status(search_id):
 def get_search_results(search_id):
     url = BASE_URL + RESULTS_ENDPOINT.format(search_id=search_id)
 
-    response = requests.get(url, headers=HEADERS, verify=False)
+    response = session.get(url)
     response.raise_for_status()
     return response.json().get("events")
 
@@ -157,8 +179,6 @@ def get_events(start_time: datetime, end_time: datetime, job_number: int, id: st
         if not search_id:
             logger.error(f"Job {job_number}: No search ID returned")
             return
-
-        logger.info(f"Job {job_number}: Search submitted with ID {search_id}")
 
         while True:
             status, progress, record_count, query = get_search_status(search_id)
@@ -182,7 +202,6 @@ def get_events(start_time: datetime, end_time: datetime, job_number: int, id: st
                         payload = [event['payload'] for event in events]
 
                     sock.sendall("".join(payload).encode('utf-8'))
-                    logger.info(f"Job {job_number}: Events from {start_time.strftime('%Y-%m-%d-%H-%M')} to {end_time.strftime('%Y-%m-%d-%H-%M')} sent to 127.0.0.1:{port}")
                 break
             
             elif status == "ERROR":
@@ -213,40 +232,53 @@ def worker(generator: TimeIntervalGenerator):
 def load_data_from_csv(csv_path: str):
     expected_format = "%Y-%m-%d %H:%M:%S"
     input = []
-    with open(csv_path, newline='') as csvfile:
-        reader = csv.DictReader(csvfile)
-        for row in reader:
-            try:
-                id = row['id']
-                name = row['name']
-                start = datetime.strptime(row['start_time'], expected_format)
-                end = datetime.strptime(row['end_time'], expected_format)
-                interval = int(row['interval_minutes'])
-                port = int(row['port'])
-                prepend_name = row['prepend_name'].lower() in ['t', 'true', '1', 'y', 'yes']
+    csv_path = Path(csv_path)
 
-                if end <= start:
-                    raise ValueError(f"End time must be after start time in range: {name}")
+    if csv_path.exists() and csv_path.is_file():
+        with open(csv_path, newline='') as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                try:
+                    id = row['id']
+                    name = row['name']
+                    start = datetime.strptime(row['start_time'], expected_format)
+                    end = datetime.strptime(row['end_time'], expected_format)
+                    interval = int(row['interval_minutes'])
+                    port = int(row['port'])
+                    prepend_name = row['prepend_name'].lower() in ['t', 'true', '1', 'y', 'yes']
 
-                input.append((id, name, start, end, interval, port, prepend_name))
-            except (ValueError, KeyError) as e:
-                error_logger.error(f"Skipping invalid row in CSV: {row} — Reason: {e}")
+                    if end <= start:
+                        raise ValueError(f"End time must be after start time in range: {name}")
+
+                    input.append((id, name, start, end, interval, port, prepend_name))
+                except (ValueError, KeyError) as e:
+                    error_logger.error(f"Skipping invalid row in CSV: {row} — Reason: {e}")
+    else:
+        error_logger.error(f"Invalid CSV input path: {csv_path}")
+
     return input
+
+def round_robin_worker(generators):
+    exhausted = set()
+
+    while len(exhausted) < len(generators):
+        for i, generator in enumerate(generators):
+            if i in exhausted:
+                continue
+
+            interval = generator.next_interval()
+            if interval:
+                get_events(*interval)
+            else:
+                exhausted.add(i)
 
 # === Entry Point ===
 def run_workers_from_csv(csv_file_path: str, worker_count: int):
-    ranges = load_data_from_csv(csv_file_path)
-    threads = []
-              
-    for id, name, start, end, interval, port, prepend_name in ranges:
-        generator = TimeIntervalGenerator(id, name, start, end, interval, port, prepend_name)
-        for i in range(worker_count):
-            t = threading.Thread(target=worker, args=(generator,), name=f"Worker-{name}-{i+1}")
-            t.start()
-            threads.append(t)
+    generators = [TimeIntervalGenerator(*args) for args in load_data_from_csv(csv_file_path)]
 
-        for t in threads:
-            t.join()
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        for _ in range(worker_count):
+            executor.submit(round_robin_worker, generators)
 
 # === Main ===
 if __name__ == "__main__":
