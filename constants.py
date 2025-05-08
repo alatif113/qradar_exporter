@@ -12,6 +12,7 @@ args = parser.parse_args()
 BASE_DIR = Path(__file__).resolve().parent
 LOG_DIR = BASE_DIR / "log"
 EXPORTS_DIR = BASE_DIR / "exports"
+INPUT_CSV = args.input_csv
 
 # === Logging Constants ===
 LOG_FORMAT = "%(asctime)s [%(threadName)s] %(name)s %(levelname)s: %(message)s"

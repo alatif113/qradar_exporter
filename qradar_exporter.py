@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Tuple, Dict
 from concurrent.futures import ThreadPoolExecutor
 from constants import (
-    LOG_FORMAT, LOG_FILE_PATH, ERROR_LOG_FILE_PATH,MAX_LOG_FILE_SIZE, BACKUP_COUNT, WORKER_COUNT, LOG_LEVEL, HEADERS, BASE_URL, SEARCH_ENDPOINT, STATUS_ENDPOINT, RESULTS_ENDPOINT, QUERY
+    INPUT_CSV, LOG_FORMAT, LOG_FILE_PATH, ERROR_LOG_FILE_PATH,MAX_LOG_FILE_SIZE, BACKUP_COUNT, WORKER_COUNT, LOG_LEVEL, HEADERS, BASE_URL, SEARCH_ENDPOINT, STATUS_ENDPOINT, RESULTS_ENDPOINT, QUERY
 )
 
 requests.packages.urllib3.disable_warnings()
@@ -240,28 +240,21 @@ def load_data_from_csv(csv_path: str):
 
     return input
 
-def round_robin_worker(generators):
-    exhausted = set()
-
-    while len(exhausted) < len(generators):
-        for i, generator in enumerate(generators):
-            if i in exhausted:
-                continue
-
-            interval = generator.next_interval()
-            if interval:
-                get_events(*interval)
-            else:
-                exhausted.add(i)
-
 # === Entry Point ===
 def run_workers_from_csv(csv_file_path: str, worker_count: int):
     generators = [TimeIntervalGenerator(*args) for args in load_data_from_csv(csv_file_path)]
 
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        for _ in range(worker_count):
-            executor.submit(round_robin_worker, generators)
+    if not generators:
+        error_logger.error("No valid generators loaded from CSV. Exiting.")
+        return
+
+    # Cap the number of threads to the number of generators
+    max_threads = min(worker_count, len(generators))
+
+    with ThreadPoolExecutor(max_workers=max_threads) as executor:
+        for generator in generators:
+            executor.submit(worker, generator) 
 
 # === Main ===
 if __name__ == "__main__":
-    run_workers_from_csv("input.csv", worker_count=WORKER_COUNT)
+    run_workers_from_csv(INPUT_CSV, worker_count=WORKER_COUNT)
