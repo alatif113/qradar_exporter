@@ -30,12 +30,6 @@ stream_handler = StreamHandler()
 stream_handler.setLevel(logging.INFO)
 stream_handler.setFormatter(logging.Formatter(LOG_FORMAT))
 
-# === Setup Queue for Asynchronous Logging ===
-log_queue = Queue()
-queue_handler = QueueHandler(log_queue)
-listener = QueueListener(log_queue, error_handler)
-listener.start()
-
 # === Dynamic Loggers by Range Name ===
 loggers: Dict[str, logging.Logger] = {}
 
@@ -51,7 +45,11 @@ def get_range_logger(name: str) -> logging.Logger:
         file_handler = RotatingFileHandler(LOG_FILE_PATH, maxBytes=MAX_LOG_FILE_SIZE, backupCount=BACKUP_COUNT)  
         file_handler.setLevel(logging.INFO)      
         file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
-        listener.addHandler(file_handler)
+
+        log_queue = Queue()
+        queue_handler = QueueHandler(log_queue)
+        listener = QueueListener(log_queue, error_handler, file_handler)
+        listener.start()
 
         logger.addHandler(queue_handler)
         logger.addHandler(stream_handler)   # Shared stream log
