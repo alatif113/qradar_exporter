@@ -27,8 +27,7 @@ BASE_URL = "https://siem.mgroupnet.com"
 SEARCH_ENDPOINT = "/api/ariel/searches"
 STATUS_ENDPOINT = "/api/ariel/searches/{search_id}"
 RESULTS_ENDPOINT = "/api/ariel/searches/{search_id}/results"
-#QUERY = "SELECT UTF8(payload) as payload from events where devicetype = {id} START '{start_time}' STOP '{stop_time}'"
-QUERY = "SELECT UTF8(payload) as payload from events WHERE logsourceid = {id} START '{start_time}' STOP '{stop_time}'"
+QUERY = "SELECT UTF8(payload) as payload from events where devicetype = {id} START '{start_time}' STOP '{stop_time}'"
 SEC_TOKEN = ""
 HEADERS = {
     'SEC': SEC_TOKEN,
