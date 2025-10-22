@@ -17,7 +17,7 @@ from constants import (
 
 requests.packages.urllib3.disable_warnings()
 
-# === Shared Error Logger ===
+# Create shared rotating error logger to capture high‑severity failures to disk
 error_handler = RotatingFileHandler(ERROR_LOG_FILE_PATH, maxBytes=MAX_LOG_FILE_SIZE, backupCount=BACKUP_COUNT)
 error_handler.setLevel(logging.ERROR)
 error_handler.setFormatter(logging.Formatter(LOG_FORMAT))
@@ -25,42 +25,46 @@ error_logger = logging.getLogger("error")
 error_logger.addHandler(error_handler)
 error_logger.setLevel(logging.ERROR)
 
-# === Shared Stream Logger ===
+# Stream handler prints info logs to stdout for realtime feedback
 stream_handler = StreamHandler()
 stream_handler.setLevel(logging.INFO)
 stream_handler.setFormatter(logging.Formatter(LOG_FORMAT))
 
-# === Dynamic Loggers by Range Name ===
+# Caches per‑range file loggers constructed on demand
 loggers: Dict[str, logging.Logger] = {}
 
-# === Shared HTTP Session ===
+# Use a single session for all HTTP calls to reuse TLS and headers
 session = requests.Session()
 session.headers.update(HEADERS)
 session.verify = False
-
+# === Range‑scoped logger factory (per CSV name) ===
 def get_range_logger(name: str) -> logging.Logger:
+    # Create per‑name loggers lazily and cache them
     if name not in loggers:
         logger = logging.getLogger(name)
 
-        file_handler = RotatingFileHandler(LOG_DIR / f"{name}.log", maxBytes=MAX_LOG_FILE_SIZE, backupCount=BACKUP_COUNT)  
-        file_handler.setLevel(logging.INFO)      
+        # Write range output to a dedicated rotating file
+        file_handler = RotatingFileHandler(LOG_DIR / f"{name}.log", maxBytes=MAX_LOG_FILE_SIZE, backupCount=BACKUP_COUNT)
+        file_handler.setLevel(logging.INFO)
         file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
 
+        # Queue-based handler forwards records to file + error handler using QueueListener
         log_queue = Queue()
         queue_handler = QueueHandler(log_queue)
         listener = QueueListener(log_queue, error_handler, file_handler)
         listener.start()
 
         logger.addHandler(queue_handler)
-        logger.addHandler(stream_handler)   # Shared stream log
+        logger.addHandler(stream_handler)   # Also emit to stdout
         logger.setLevel(LOG_LEVEL)
         logger.propagate = False
         loggers[name] = logger
 
     return loggers[name]
 
-# === Job Progress Tracker ===
+# === Global job progress tracker shared across workers ===
 class JobProgressTracker:
+    # Maintains total job count, completion counter, and ETA from start time
     def __init__(self, total_jobs):
         self.total_jobs = total_jobs
         self.current_job = 0
@@ -68,14 +72,17 @@ class JobProgressTracker:
         self.lock = threading.Lock()
 
     def get_current_job(self):
+        # Safely increment shared completed counter under lock
         with self.lock:
             self.current_job += 1
             return self.current_job
-        
+
     def get_total_jobs(self):
+        # Expose job count for callers
         return self.total_jobs
 
     def estimate_remaining(self):
+        # Estimate ETC based on average observed duration so far
         with self.lock:
             if self.current_job == 0:
                 return None
@@ -84,15 +91,16 @@ class JobProgressTracker:
             remaining_jobs = self.total_jobs - self.current_job
             return timedelta(seconds=remaining_jobs * avg_duration)
 
-# === Time Interval Generator ===
+# === Produces backwards time windows per device row from CSV ===
 class TimeIntervalGenerator:
+    # Holds ID/name/time bounds and yields fixed-size windows backward from end
     def __init__(self, id, name, start, end, interval, port, prepend_name):
         self.logger = logging.getLogger(name)
         self.id = id
         self.name = name
         self.start = start
         self.end = end
-        self.current = end  # Start from the END and move backward
+        self.current = end            # Start traversal at upper bound
         self.interval = timedelta(minutes=interval)
         self.port = port
         self.lock = threading.Lock()
@@ -100,13 +108,14 @@ class TimeIntervalGenerator:
         self.prepend_name = prepend_name
 
     def next_interval(self) -> Optional[Tuple[datetime, datetime, int, str, int, bool]]:
+        # Yield next (start,end,...) window or return None when all intervals consumed
         with self.lock:
             if self.current <= self.start:
-                return None  # Reached or passed the lower bound
-            
+                return None
+
             interval_end = self.current
             interval_start = max(self.start, interval_end - self.interval)
-            self.current = interval_start  # Move pointer back for next call
+            self.current = interval_start
 
             return (
                 interval_start,
@@ -116,9 +125,11 @@ class TimeIntervalGenerator:
                 self.port,
                 self.prepend_name,
             )
-        
-# === Submit Search ===
+
+# === QRadar API request helpers ===
+
 def submit_search(id, start_time, stop_time):
+    # Issue a search to QRadar Ariel API for given device/time range, return search_id
     start_time_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
     stop_time_str = stop_time.strftime("%Y-%m-%d %H:%M:%S")
     url = BASE_URL + SEARCH_ENDPOINT
@@ -129,34 +140,37 @@ def submit_search(id, start_time, stop_time):
     response.raise_for_status()
     return response.json().get("search_id")
 
-# === Get Search Status ===
 def get_search_status(search_id):
+    # Retrieve the status/progress/count of a running search
     url = BASE_URL + STATUS_ENDPOINT.format(search_id=search_id)
     response = session.get(url)
     response.raise_for_status()
     res_json = response.json()
     return res_json.get("status"), res_json.get("progress"), res_json.get("record_count"), res_json.get("query_string")
 
-# === Get Search Results ===
 def get_search_results(search_id):
+    # Fetch search results (events) once search completes
     url = BASE_URL + RESULTS_ENDPOINT.format(search_id=search_id)
     response = session.get(url)
     response.raise_for_status()
     return response.json().get("events")
 
-# === Worker Function ===
+# === Worker function to handle a single interval ===
 def get_events(start_time: datetime, end_time: datetime, id: str, name: str, port: int, prepend_name: bool, global_tracker: JobProgressTracker):
+    # Acquire a logger for this CSV/device name
     logger = get_range_logger(name)
     job_number = global_tracker.get_current_job()
     total_jobs = global_tracker.get_total_jobs()
     log_prefix = f"Job {job_number} of {global_tracker.total_jobs} ({int(job_number/total_jobs * 100)}%)"
 
+    # Log estimated remaining time every 5 jobs
     if job_number % 5 == 0:
         logger.info(f"!!! ESTIMATED TIME REMAINING: {global_tracker.estimate_remaining()}")
 
     logger.info(f"{log_prefix}: Searching '{name}' on interval {start_time} to {end_time}")
-    
+
     try:
+        # Submit QRadar search and get search ID
         search_id = submit_search(id, start_time, end_time)
 
         if not search_id:
@@ -164,20 +178,23 @@ def get_events(start_time: datetime, end_time: datetime, id: str, name: str, por
             return
 
         while True:
+            # Poll search status until completion or error
             status, progress, record_count, query = get_search_status(search_id)
 
             if status == "COMPLETED":
-                
+                # No events to process
                 if record_count == 0:
                     logger.info(f"{log_prefix}: No events found in interval")
                     return
-                
+
+                # Fetch events results
                 events = get_search_results(search_id)
 
                 if not events:
                     logger.error(f"{log_prefix}: {record_count} events could not be returned")
                     return
 
+                # Send events over TCP socket to specified port
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                     sock.connect(('127.0.0.1', port))
                     if prepend_name:
@@ -185,32 +202,36 @@ def get_events(start_time: datetime, end_time: datetime, id: str, name: str, por
                     else:
                         payload = [event['payload'].strip() for event in events]
 
-                    sock.sendall("\n".join(payload).encode('utf-8'))
+                    sock.sendall("
+".join(payload).encode('utf-8'))
 
                 logger.info(f"{log_prefix}: Exported {record_count} events")
                 break
-            
+
             elif status == "ERROR":
                 logger.error(f"{log_prefix}: Search failed with query {query}")
                 break
-            
+
             elif status == "CANCELED":
                 logger.error(f"{log_prefix}: Search canceled with query {query}")
                 break
-            
+
             else:
+                # Pending or running, retry after 5 seconds
                 logger.info(f"{log_prefix}: Search in status {status} with progress {progress}, retrying in 5s")
                 time.sleep(5)
 
     except requests.RequestException as e:
         logger.exception(f"{log_prefix}: Error during execution — Reason: {e}")
 
-# === Worker Thread Loop ===
+# === Worker thread loop for round-robin processing across generators ===
 def round_robin_worker(generators, exhausted, exhausted_lock, global_tracker):
+    # Continue until all generators have been exhausted
     while True:
         all_exhausted = True
 
         for i, generator in enumerate(generators):
+            # Skip if this generator is already exhausted
             with exhausted_lock:
                 if i in exhausted:
                     continue
@@ -220,13 +241,14 @@ def round_robin_worker(generators, exhausted, exhausted_lock, global_tracker):
                 get_events(*interval, global_tracker)
                 all_exhausted = False
             else:
+                # Mark generator as exhausted
                 with exhausted_lock:
                     exhausted.add(i)
 
         if all_exhausted:
             break
 
-# === CSV Reader ===
+# === Load CSV rows into generator tuples ===
 def load_data_from_csv(csv_path: str):
     expected_format = "%Y-%m-%d %H:%M:%S"
     input = []
@@ -256,25 +278,28 @@ def load_data_from_csv(csv_path: str):
 
     return input
 
-# === Entry Point ===
+# === Entrypoint to run workers from CSV input ===
 def run_workers_from_csv(csv_file_path: str, worker_count: int):
+    # Load rows into TimeIntervalGenerator instances
     input_list = load_data_from_csv(csv_file_path)
     generators = [TimeIntervalGenerator(*args) for args in input_list]
 
     if not generators:
         error_logger.error("No valid generators found.")
         return
-    
+
+    # Count total jobs across all generators for progress tracking
     total_jobs = sum(int(((end - start).total_seconds()) // (interval * 60)) for (_, _, start, end, interval, _, _) in input_list)
     global_tracker = JobProgressTracker(total_jobs)
 
     exhausted = set()
     exhausted_lock = threading.Lock()
 
+    # Submit worker threads
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         for _ in range(worker_count):
             executor.submit(round_robin_worker, generators, exhausted, exhausted_lock, global_tracker)
 
-# === Main ===
+# === Main execution ===
 if __name__ == "__main__":
     run_workers_from_csv(INPUT_CSV, worker_count=WORKER_COUNT)
