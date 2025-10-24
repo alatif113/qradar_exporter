@@ -25,7 +25,7 @@ MAX_LOG_FILE_SIZE = 5 * 1024 * 1024  # Maximum size (bytes) for each log file be
 BACKUP_COUNT = 10                    # Number of rotated backups to keep; user can adjust to save more/less history
 
 # === HTTP/Network Constants ===
-BASE_URL = "https://siem.mgroupnet.com"  # Base URL of the QRadar instance; user must modify if connecting to another system
+BASE_URL = "https://..."  # Base URL of the QRadar instance; user must modify if connecting to another system
 SEARCH_ENDPOINT = "/api/ariel/searches"  # QRadar API endpoint for submitting searches
 STATUS_ENDPOINT = "/api/ariel/searches/{search_id}"  # Endpoint to check search status; usually does not need user change
 RESULTS_ENDPOINT = "/api/ariel/searches/{search_id}/results"  # Endpoint to fetch search results
